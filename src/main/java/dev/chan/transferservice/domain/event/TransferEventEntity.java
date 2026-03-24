@@ -9,7 +9,8 @@ import java.time.LocalDateTime;
 @Table(name = "transfer_events",
       indexes = {
           @Index(name = "idx_idempotency_key", columnList = "idempotencyKey"),
-          @Index(name = "idx_occurred_at", columnList = "occurredAt")
+          @Index(name = "idx_occurred_at", columnList = "occurredAt"),
+          @Index(name = "idx_published", columnList = "published")
       })
 @Getter
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
@@ -40,11 +41,18 @@ public class TransferEventEntity {
     @Column(nullable = false)
     private LocalDateTime occurredAt;
 
+    // Outbox status
+    @Column(nullable = false)
+    private boolean published;
+
+    private LocalDateTime publishedAt;
+
     @Builder
     public TransferEventEntity(String eventId, String idempotencyKey,
                                String fromAccountNumber, String toAccountNumber,
                                BigDecimal amount, String status,
-                               String failReason, LocalDateTime occurredAt) {
+                               String failReason, LocalDateTime occurredAt,
+                               boolean published) {
         this.eventId = eventId;
         this.idempotencyKey = idempotencyKey;
         this.fromAccountNumber = fromAccountNumber;
@@ -53,5 +61,12 @@ public class TransferEventEntity {
         this.status = status;
         this.failReason = failReason;
         this.occurredAt = occurredAt;
+        this.published = published;
+    }
+
+    // 메시지 발행 완료 시 호출
+    public void markAsPublished() {
+        this.published = true;
+        this.publishedAt = LocalDateTime.now();
     }
 }

@@ -7,7 +7,6 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.kafka.core.KafkaTemplate;
 import java.math.BigDecimal;
 import java.util.Optional;
 
@@ -20,7 +19,6 @@ class TransferServiceTest {
     @Mock AccountRepository accountRepository;
     @Mock TransferEventRepository transferEventRepository;
     @Mock AuditLogRepository auditLogRepository;
-    @Mock KafkaTemplate<String, TransferEvent> kafkaTemplate;
 
     @InjectMocks TransferService transferService;
 
@@ -42,14 +40,15 @@ class TransferServiceTest {
     }
 
     @Test
-    @DisplayName("정상 이체 - 잔액 차감 및 증가 확인")
+    @DisplayName("정상 이체 - 잔액 차감 및 아웃박스 저장 확인")
     void transfer_success() {
+        // given
         when(accountRepository.findByAccountNumberWithLock("1000000001"))
             .thenReturn(Optional.of(fromAccount));
         when(accountRepository.findByAccountNumberWithLock("2000000002"))
             .thenReturn(Optional.of(toAccount));
-        when(transferEventRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
-        when(auditLogRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        
+        ArgumentCaptor<TransferEventEntity> eventCaptor = ArgumentCaptor.forClass(TransferEventEntity.class);
 
         TransferCommand command = TransferCommand.builder()
             .idempotencyKey("test-key-001")
@@ -58,12 +57,19 @@ class TransferServiceTest {
             .amount(new BigDecimal("100000"))
             .build();
 
+        // when
         TransferResult result = transferService.transfer(command);
 
+        // then
         assertThat(fromAccount.getBalance()).isEqualByComparingTo("400000");
         assertThat(toAccount.getBalance()).isEqualByComparingTo("200000");
+        
+        // 아웃박스 엔티티 저장 검증 (published = false 여야 함)
+        verify(transferEventRepository, times(1)).save(eventCaptor.capture());
+        assertThat(eventCaptor.getValue().isPublished()).isFalse();
+        assertThat(eventCaptor.getValue().getAmount()).isEqualByComparingTo("100000");
+        
         assertThat(result.getFromBalanceAfter()).isEqualByComparingTo("400000");
-        verify(kafkaTemplate, times(1)).send(any(), any(), any());
     }
 
     @Test
@@ -73,7 +79,6 @@ class TransferServiceTest {
             .thenReturn(Optional.of(fromAccount));
         when(accountRepository.findByAccountNumberWithLock("2000000002"))
             .thenReturn(Optional.of(toAccount));
-        when(auditLogRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         TransferCommand command = TransferCommand.builder()
             .idempotencyKey("test-key-002")

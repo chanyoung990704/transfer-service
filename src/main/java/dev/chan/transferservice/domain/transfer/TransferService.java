@@ -5,7 +5,6 @@ import dev.chan.transferservice.domain.account.*;
 import dev.chan.transferservice.domain.event.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
@@ -16,18 +15,14 @@ import java.util.UUID;
 @Slf4j
 public class TransferService {
 
-    private static final String TRANSFER_TOPIC = "transfer-events";
-
     private final AccountRepository accountRepository;
     private final TransferEventRepository transferEventRepository;
     private final AuditLogRepository auditLogRepository;
-    private final KafkaTemplate<String, TransferEvent> kafkaTemplate;
 
     /**
      * 계좌 이체 핵심 로직
-     * - Pessimistic Lock으로 동시성 제어 (SELECT ... FOR UPDATE)
-     * - 이벤트 소싱으로 모든 이체 이력 영구 보관
-     * - Kafka로 이체 완료 이벤트 발행
+     * - Transactional Outbox Pattern: DB 트랜잭션 내에서 비즈니스 로직과 아웃박스(이벤트)를 동시에 저장.
+     * - 비동기 메시지 발행은 별도의 OutboxRelay가 처리.
      */
     @Transactional
     public TransferResult transfer(TransferCommand command) {
@@ -64,7 +59,7 @@ public class TransferService {
         fromAccount.withdraw(command.getAmount());
         toAccount.deposit(command.getAmount());
 
-        // 이벤트 원장(Event Store)에 저장 - 이벤트 소싱
+        // 아웃박스(Outbox) 테이블에 저장 (메시지 발행 원자성 보장)
         TransferEventEntity eventEntity = TransferEventEntity.builder()
             .eventId(eventId)
             .idempotencyKey(command.getIdempotencyKey())
@@ -73,6 +68,7 @@ public class TransferService {
             .amount(command.getAmount())
             .status("COMPLETED")
             .occurredAt(LocalDateTime.now())
+            .published(false) // 아직 발행되지 않음
             .build();
         transferEventRepository.save(eventEntity);
 
@@ -86,18 +82,7 @@ public class TransferService {
             .result("SUCCESS")
             .build());
 
-        // Kafka 이벤트 발행
-        TransferEvent kafkaEvent = TransferEvent.builder()
-            .eventId(eventId)
-            .idempotencyKey(command.getIdempotencyKey())
-            .fromAccountNumber(command.getFromAccountNumber())
-            .toAccountNumber(command.getToAccountNumber())
-            .amount(command.getAmount())
-            .status("COMPLETED")
-            .occurredAt(LocalDateTime.now())
-            .build();
-        kafkaTemplate.send(TRANSFER_TOPIC, eventId, kafkaEvent);
-        log.info("Kafka 이벤트 발행 완료 - eventId: {}", eventId);
+        log.info("DB 트랜잭션 완료 준비 (아웃박스 저장 완료) - eventId: {}", eventId);
 
         return TransferResult.builder()
             .eventId(eventId)
