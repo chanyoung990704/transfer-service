@@ -1,0 +1,36 @@
+spring:
+  datasource:
+    url: jdbc:mysql://localhost:3306/transfer_db?useSSL=false&serverTimezone=Asia/Seoul
+    username: root
+    password: password
+    hikari:
+      maximum-pool-size: 20
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: true
+    properties:
+      hibernate.format_sql: true
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    consumer:
+      group-id: transfer-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "dev.chan.transferservice.domain.event"
+
+transfer:
+  idempotency:
+    ttl-seconds: 86400  # 24시간
