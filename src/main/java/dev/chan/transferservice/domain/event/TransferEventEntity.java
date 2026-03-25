@@ -16,6 +16,12 @@ import java.time.LocalDateTime;
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class TransferEventEntity {
 
+    // Saga Status Constants
+    public static final String STATUS_WITHDRAWN = "WITHDRAWN";      // 1단계: 출금 완료
+    public static final String STATUS_COMPLETED = "COMPLETED";      // 2단계: 입금/이체 완료
+    public static final String STATUS_DEPOSIT_FAILED = "DEPOSIT_FAILED"; // 2단계 실패: 입금 실패
+    public static final String STATUS_REFUNDED = "REFUNDED";        // 보상 트랜잭션: 환불 완료
+
     @Id
     @Column(length = 36)
     private String eventId;
@@ -33,7 +39,7 @@ public class TransferEventEntity {
     private BigDecimal amount;
 
     @Column(nullable = false, length = 20)
-    private String status;
+    private String status; // Saga 상태 저장
 
     @Column(length = 500)
     private String failReason;
@@ -41,7 +47,6 @@ public class TransferEventEntity {
     @Column(nullable = false)
     private LocalDateTime occurredAt;
 
-    // Outbox status
     @Column(nullable = false)
     private boolean published;
 
@@ -64,7 +69,13 @@ public class TransferEventEntity {
         this.published = published;
     }
 
-    // 메시지 발행 완료 시 호출
+    // 상태 업데이트 및 발행 대기 상태로 변경
+    public void updateStatus(String status, String failReason) {
+        this.status = status;
+        this.failReason = failReason;
+        this.published = false; // 새로운 상태를 다시 발행해야 함 (Relay가 감지)
+    }
+
     public void markAsPublished() {
         this.published = true;
         this.publishedAt = LocalDateTime.now();

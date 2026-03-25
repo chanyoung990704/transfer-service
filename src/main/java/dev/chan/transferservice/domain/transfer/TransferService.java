@@ -20,69 +20,44 @@ public class TransferService {
     private final AuditLogRepository auditLogRepository;
 
     /**
-     * 계좌 이체 핵심 로직
-     * - Transactional Outbox Pattern: DB 트랜잭션 내에서 비즈니스 로직과 아웃박스(이벤트)를 동시에 저장.
-     * - 비동기 메시지 발행은 별도의 OutboxRelay가 처리.
+     * Saga 1단계: 출금 (Withdrawal)
+     * - 보상 트랜잭션을 위해 상태를 WITHDRAWN으로 기록하고 아웃박스 저장.
      */
     @Transactional
     public TransferResult transfer(TransferCommand command) {
         String eventId = UUID.randomUUID().toString();
-        log.info("이체 시작 - eventId: {}, from: {}, to: {}, amount: {}",
-            eventId, command.getFromAccountNumber(), command.getToAccountNumber(), command.getAmount());
+        log.info("Saga 1단계 시작 [출금] - eventId: {}, from: {}, amount: {}", 
+                 eventId, command.getFromAccountNumber(), command.getAmount());
 
-        // 감사 로그 - 요청 기록
-        auditLogRepository.save(AuditLog.builder()
-            .action("TRANSFER_REQUEST")
-            .idempotencyKey(command.getIdempotencyKey())
-            .fromAccount(command.getFromAccountNumber())
-            .toAccount(command.getToAccountNumber())
-            .detail("amount=" + command.getAmount())
-            .result("PENDING")
-            .build());
+        // 출금 계좌 비관적 락 조회
+        Account fromAccount = accountRepository.findByAccountNumberWithLock(command.getFromAccountNumber())
+            .orElseThrow(() -> new IllegalArgumentException("출금 계좌를 찾을 수 없습니다: " + command.getFromAccountNumber()));
 
-        // Pessimistic Lock으로 두 계좌 조회
-        // 데드락 방지: 항상 accountNumber 오름차순으로 잠금 획득
-        String first = command.getFromAccountNumber().compareTo(command.getToAccountNumber()) < 0
-            ? command.getFromAccountNumber() : command.getToAccountNumber();
-        String second = first.equals(command.getFromAccountNumber())
-            ? command.getToAccountNumber() : command.getFromAccountNumber();
-
-        Account firstAccount = accountRepository.findByAccountNumberWithLock(first)
-            .orElseThrow(() -> new IllegalArgumentException("계좌를 찾을 수 없습니다: " + first));
-        Account secondAccount = accountRepository.findByAccountNumberWithLock(second)
-            .orElseThrow(() -> new IllegalArgumentException("계좌를 찾을 수 없습니다: " + second));
-
-        Account fromAccount = first.equals(command.getFromAccountNumber()) ? firstAccount : secondAccount;
-        Account toAccount = first.equals(command.getToAccountNumber()) ? firstAccount : secondAccount;
-
-        // 출금 / 입금 (도메인 객체 내부에서 유효성 검사)
+        // 출금 수행
         fromAccount.withdraw(command.getAmount());
-        toAccount.deposit(command.getAmount());
 
-        // 아웃박스(Outbox) 테이블에 저장 (메시지 발행 원자성 보장)
+        // 아웃박스(Outbox) 테이블에 WITHDRAWN 상태로 저장
         TransferEventEntity eventEntity = TransferEventEntity.builder()
             .eventId(eventId)
             .idempotencyKey(command.getIdempotencyKey())
             .fromAccountNumber(command.getFromAccountNumber())
             .toAccountNumber(command.getToAccountNumber())
             .amount(command.getAmount())
-            .status("COMPLETED")
+            .status(TransferEventEntity.STATUS_WITHDRAWN) // 1단계 완료
             .occurredAt(LocalDateTime.now())
-            .published(false) // 아직 발행되지 않음
+            .published(false)
             .build();
         transferEventRepository.save(eventEntity);
 
-        // 감사 로그 - 완료 기록
+        // 감사 로그 기록
         auditLogRepository.save(AuditLog.builder()
-            .action("TRANSFER_COMPLETE")
+            .action("SAGA_WITHDRAW_COMPLETE")
             .idempotencyKey(command.getIdempotencyKey())
             .fromAccount(command.getFromAccountNumber())
             .toAccount(command.getToAccountNumber())
             .detail("eventId=" + eventId + ", amount=" + command.getAmount())
             .result("SUCCESS")
             .build());
-
-        log.info("DB 트랜잭션 완료 준비 (아웃박스 저장 완료) - eventId: {}", eventId);
 
         return TransferResult.builder()
             .eventId(eventId)
@@ -92,5 +67,67 @@ public class TransferService {
             .fromBalanceAfter(fromAccount.getBalance())
             .completedAt(LocalDateTime.now())
             .build();
+    }
+
+    /**
+     * Saga 2단계: 입금 (Deposit) - Consumer에 의해 호출됨
+     */
+    @Transactional
+    public void deposit(String eventId, String toAccountNumber, java.math.BigDecimal amount) {
+        log.info("Saga 2단계 시작 [입금] - eventId: {}, to: {}, amount: {}", eventId, toAccountNumber, amount);
+        
+        TransferEventEntity eventEntity = transferEventRepository.findById(eventId)
+            .orElseThrow(() -> new IllegalStateException("이벤트를 찾을 수 없습니다: " + eventId));
+
+        if (TransferEventEntity.STATUS_COMPLETED.equals(eventEntity.getStatus())) {
+            log.info("이미 완료된 이체입니다: {}", eventId);
+            return;
+        }
+
+        try {
+            // 입금 계좌 비관적 락 조회
+            Account toAccount = accountRepository.findByAccountNumberWithLock(toAccountNumber)
+                .orElseThrow(() -> new IllegalArgumentException("입금 계좌를 찾을 수 없습니다: " + toAccountNumber));
+
+            // 입금 수행
+            toAccount.deposit(amount);
+
+            // 상태 업데이트: COMPLETED
+            eventEntity.updateStatus(TransferEventEntity.STATUS_COMPLETED, null);
+            log.info("Saga 전체 완료 - eventId: {}", eventId);
+
+        } catch (Exception e) {
+            log.error("입금 실패로 인한 보상 트랜잭션 유도 - eventId: {}, 사유: {}", eventId, e.getMessage());
+            // 입금 실패 시 상태를 DEPOSIT_FAILED로 변경하여 Relay가 보상 트랜잭션 이벤트를 발행하게 함
+            eventEntity.updateStatus(TransferEventEntity.STATUS_DEPOSIT_FAILED, e.getMessage());
+            throw e; // 트랜잭션 롤백 및 에러 로그 확인용
+        }
+    }
+
+    /**
+     * Saga 보상 트랜잭션: 환불 (Refund) - 입금 실패 시 호출됨
+     */
+    @Transactional
+    public void refund(String eventId) {
+        TransferEventEntity eventEntity = transferEventRepository.findById(eventId)
+            .orElseThrow(() -> new IllegalStateException("이벤트를 찾을 수 없습니다: " + eventId));
+
+        if (TransferEventEntity.STATUS_REFUNDED.equals(eventEntity.getStatus())) {
+            log.info("이미 환불 처리된 이체입니다: {}", eventId);
+            return;
+        }
+
+        log.info("보상 트랜잭션 시작 [환불] - eventId: {}, to: {}", eventId, eventEntity.getFromAccountNumber());
+
+        Account fromAccount = accountRepository.findByAccountNumberWithLock(eventEntity.getFromAccountNumber())
+            .orElseThrow(() -> new IllegalStateException("환불 계좌를 찾을 수 없습니다: " + eventEntity.getFromAccountNumber()));
+
+        // 환불 수행 (입금과 동일한 로직)
+        fromAccount.deposit(eventEntity.getAmount());
+
+        // 상태 업데이트: REFUNDED
+        eventEntity.updateStatus(TransferEventEntity.STATUS_REFUNDED, "Deposit failed, money refunded");
+        
+        log.info("보상 트랜잭션 완료 - eventId: {}", eventId);
     }
 }
