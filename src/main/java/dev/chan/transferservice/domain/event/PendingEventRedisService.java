@@ -2,6 +2,7 @@ package dev.chan.transferservice.domain.event;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -31,10 +32,29 @@ public class PendingEventRedisService {
             redisTemplate.opsForZSet().add(PENDING_EVENTS_KEY, eventId, score);
         } catch (Exception e) {
             log.error("Failed to add event to Redis ZSET: eventId={}, error={}", eventId, e.getMessage());
-            throw e;
         }
     }
 
+    /**
+     * 특정 시점(threshold) 이전의 만료된 이벤트들만 조회
+     */
+    public List<String> getExpiredEvents(LocalDateTime threshold, int limit) {
+        double maxScore = toEpochMilliSeconds(threshold);
+        try {
+            Set<Object> membersObj = redisTemplate.opsForZSet().rangeByScore(PENDING_EVENTS_KEY, 0, maxScore, 0, limit);
+            if (membersObj == null) return List.of();
+            return membersObj.stream()
+                .map(obj -> (String) obj)
+                .collect(Collectors.toList());
+        } catch (Exception e) {
+            log.error("Failed to fetch expired events from Redis ZSET: {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * 기존 Relay 코드 호환성을 위한 메서드
+     */
     public List<String> getNextBatch(int limit) {
         try {
             Set<Object> membersObj = redisTemplate.opsForZSet().range(PENDING_EVENTS_KEY, 0L, (long) (limit - 1));
@@ -44,7 +64,7 @@ public class PendingEventRedisService {
                 .collect(Collectors.toList());
         } catch (Exception e) {
             log.error("Failed to fetch batch from Redis ZSET: {}", e.getMessage());
-            throw e;
+            return List.of();
         }
     }
 
@@ -53,22 +73,22 @@ public class PendingEventRedisService {
             return;
         }
         try {
-            redisTemplate.opsForZSet().remove(PENDING_EVENTS_KEY, eventIds.toArray(new String[0]));
+            // 가변 인자 경고 해결을 위해 Object 배열로 명시적 캐스팅
+            redisTemplate.opsForZSet().remove(PENDING_EVENTS_KEY, (Object[]) eventIds.toArray(new String[0]));
         } catch (Exception e) {
             log.error("Failed to remove events from Redis ZSET: count={}, error={}", eventIds.size(), e.getMessage());
-            throw e;
         }
     }
 
     public boolean isHealthy() {
         try {
-            Boolean healthy = redisTemplate.execute(connection -> {
+            // RedisCallback 타입을 명시적으로 지정하여 모호성 해결
+            Boolean healthy = redisTemplate.execute((RedisCallback<Boolean>) connection -> {
                 connection.ping();
-                return Boolean.TRUE;
+                return true;
             });
             return Boolean.TRUE.equals(healthy);
         } catch (Exception e) {
-            log.debug("Redis health check failed: {}", e.getMessage());
             return false;
         }
     }

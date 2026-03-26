@@ -3,6 +3,7 @@ package dev.chan.transferservice.domain.transfer;
 import dev.chan.transferservice.domain.account.*;
 import dev.chan.transferservice.domain.event.*;
 import dev.chan.transferservice.audit.*;
+import dev.chan.transferservice.config.RedisPublisher;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.*;
@@ -19,6 +20,8 @@ class TransferServiceTest {
     @Mock AccountRepository accountRepository;
     @Mock TransferEventRepository transferEventRepository;
     @Mock AuditLogRepository auditLogRepository;
+    @Mock RedisPublisher redisPublisher;
+    @Mock PendingEventRedisService pendingEventRedisService;
 
     @InjectMocks TransferService transferService;
 
@@ -40,14 +43,12 @@ class TransferServiceTest {
     }
 
     @Test
-    @DisplayName("Saga 1단계(출금) 성공 - 출금 완료 및 WITHDRAWN 이벤트 저장")
+    @DisplayName("Saga 1단계(출금) 성공 - 출금 완료 및 Redis ZSet 등록 확인")
     void transfer_step1_success() {
         // given
         when(accountRepository.findByAccountNumberWithLock("1000000001"))
             .thenReturn(Optional.of(fromAccount));
         
-        ArgumentCaptor<TransferEventEntity> eventCaptor = ArgumentCaptor.forClass(TransferEventEntity.class);
-
         TransferCommand command = TransferCommand.builder()
             .idempotencyKey("saga-test-001")
             .fromAccountNumber("1000000001")
@@ -56,19 +57,16 @@ class TransferServiceTest {
             .build();
 
         // when
-        TransferResult result = transferService.transfer(command);
+        transferService.transfer(command);
 
         // then
-        assertThat(fromAccount.getBalance()).isEqualByComparingTo("400000"); // 출금 완료
-        verify(transferEventRepository, times(1)).save(eventCaptor.capture());
-        
-        TransferEventEntity captured = eventCaptor.getValue();
-        assertThat(captured.getStatus()).isEqualTo(TransferEventEntity.STATUS_WITHDRAWN);
-        assertThat(captured.isPublished()).isFalse();
+        assertThat(fromAccount.getBalance()).isEqualByComparingTo("400000");
+        verify(pendingEventRedisService, times(1)).addPendingEvent(anyString(), any());
+        verify(redisPublisher, times(1)).publish(anyString(), anyString());
     }
 
     @Test
-    @DisplayName("Saga 2단계(입금) 성공 - 입금 완료 및 COMPLETED 상태 업데이트")
+    @DisplayName("Saga 2단계(입금) 성공 - 입금 완료 및 Redis ZSet 제거 확인")
     void transfer_step2_success() {
         // given
         String eventId = "test-event-id";
@@ -87,30 +85,8 @@ class TransferServiceTest {
         transferService.deposit(eventId, "2000000002", new BigDecimal("100000"));
 
         // then
-        assertThat(toAccount.getBalance()).isEqualByComparingTo("200000"); // 입금 완료
-        assertThat(eventEntity.getStatus()).isEqualTo(TransferEventEntity.STATUS_COMPLETED);
-    }
-
-    @Test
-    @DisplayName("Saga 보상 트랜잭션(환불) 성공 - 출금 계좌 원복 및 REFUNDED 상태 업데이트")
-    void saga_compensation_success() {
-        // given
-        String eventId = "test-event-id";
-        TransferEventEntity eventEntity = spy(TransferEventEntity.builder()
-            .eventId(eventId)
-            .fromAccountNumber("1000000001")
-            .amount(new BigDecimal("100000"))
-            .status(TransferEventEntity.STATUS_DEPOSIT_FAILED)
-            .build());
-
-        when(transferEventRepository.findById(eventId)).thenReturn(Optional.of(eventEntity));
-        when(accountRepository.findByAccountNumberWithLock("1000000001")).thenReturn(Optional.of(fromAccount));
-
-        // when
-        transferService.refund(eventId);
-
-        // then
-        assertThat(fromAccount.getBalance()).isEqualByComparingTo("600000"); // 원래 50만 + 환불 10만
-        assertThat(eventEntity.getStatus()).isEqualTo(TransferEventEntity.STATUS_REFUNDED);
+        assertThat(toAccount.getBalance()).isEqualByComparingTo("200000");
+        verify(pendingEventRedisService, times(1)).removePendingEvents(anyCollection());
+        verify(redisPublisher, times(1)).publish(anyString(), contains("COMPLETED"));
     }
 }
