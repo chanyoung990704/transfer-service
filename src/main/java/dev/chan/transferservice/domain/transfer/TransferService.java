@@ -18,6 +18,7 @@ public class TransferService {
     private final AccountRepository accountRepository;
     private final TransferEventRepository transferEventRepository;
     private final AuditLogRepository auditLogRepository;
+    private final PendingEventRedisService pendingEventRedisService;
 
     /**
      * Saga 1단계: 출금 (Withdrawal)
@@ -48,6 +49,13 @@ public class TransferService {
             .published(false)
             .build();
         transferEventRepository.save(eventEntity);
+
+        try {
+            pendingEventRedisService.addPendingEvent(eventEntity.getEventId(), eventEntity.getOccurredAt());
+        } catch (Exception e) {
+            log.warn("Failed to enqueue event to Redis pending set: eventId={}, error={}",
+                     eventEntity.getEventId(), e.getMessage());
+        }
 
         // 감사 로그 기록
         auditLogRepository.save(AuditLog.builder()
