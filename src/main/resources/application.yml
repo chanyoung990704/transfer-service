@@ -1,6 +1,6 @@
 server:
-  port: ${SERVER_PORT:8080} # 멀티 인스턴스를 위해 환경 변수 사용 가능하게 설정
-  shutdown: graceful # 안전한 종료 활성화
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
 
 spring:
   datasource:
@@ -36,16 +36,22 @@ spring:
         spring.json.trusted.packages: "dev.chan.transferservice.domain.event"
 
   lifecycle:
-    timeout-per-shutdown-phase: 30s # Graceful Shutdown 대기 시간
+    timeout-per-shutdown-phase: 30s
 
 management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics # 상태 확인용 엔드포인트 노출
+        include: health,info,metrics,zipkin
   endpoint:
     health:
       show-details: always
+  tracing:
+    sampling:
+      probability: 1.0 # 모든 요청 추적 (테스트용)
+  zipkin:
+    tracing:
+      endpoint: ${MANAGEMENT_ZIPKIN_TRACING_ENDPOINT:http://localhost:9411/api/v2/spans}
 
 transfer:
   idempotency:
@@ -53,4 +59,4 @@ transfer:
 
 logging:
   pattern:
-    console: "[${INSTANCE_NAME:local}] %d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    console: "[${INSTANCE_NAME:local},%X{traceId:-},%X{spanId:-}] %d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"

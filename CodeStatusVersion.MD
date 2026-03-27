@@ -3,40 +3,33 @@
 이 문서는 고가용성 분산 환경을 고려하여 설계된 **이체 및 결제 서비스(Transfer & Payment Service)**의 아키텍처와 현재 구현 상태를 상세히 설명합니다.
 
 ## 🚀 프로젝트 개요
-본 프로젝트는 단순한 이체 기능을 넘어, 분산 시스템에서 발생할 수 있는 데이터 정합성 문제와 확장성 문제를 해결하기 위해 다양한 마이크로서비스 패턴을 적용한 레퍼런스 프로젝트입니다. 최근 **결제 및 취소/환불 시스템** 아키텍처가 통합되었습니다.
+본 프로젝트는 단순한 이체 기능을 넘어, 분산 시스템에서 발생할 수 있는 데이터 정합성 문제와 확장성 문제를 해결하기 위해 다양한 마이크로서비스 패턴을 적용한 레퍼런스 프로젝트입니다.
+
+---
+
+## 🛠 기술 스택
+- **Framework**: Spring Boot 3.2.3, Java 17
+- **Database**: MySQL 8.0 (Pessimistic Lock 적용)
+- **Messaging**: Apache Kafka (Exactly-once Semantics)
+- **Cache & Lock**: Redis (Idempotency, ZSet, Pub/Sub, ShedLock 준비)
+- **Infrastructure**: NGINX (Load Balancer), Docker Compose, **Zipkin (Distributed Tracing)**
+- **Monitoring**: Spring Boot Actuator, **Micrometer Tracing**
 
 ---
 
 ## 🏗 핵심 아키텍처 패턴
 
-### 3. 결제 상태 머신 (Payment State Machine)
-결제의 신뢰성을 위해 엄격한 상태 전이 규칙을 적용한 상태 머신을 도입했습니다.
-- **상태 종류**: `READY` -> `IN_PROGRESS` -> `DONE` / `CANCELED` / `ABORTED` / `PARTIAL_CANCELED`.
-- **특징**: 잘못된 상태 전이(예: 취소된 결제를 완료로 변경)를 도메인 계층에서 원천 차단하며, 부분 취소 시 누적 금액을 관리합니다.
-
-### 4. 결제 승인 및 취소 흐름
-- **위변조 검증**: 승인 요청 시 내부 DB의 주문 금액과 요청 금액을 대조하여 보안을 강화했습니다.
-- **3-Party 승인/취소**: 우리 서버 -> PG사 -> 카드사로 이어지는 외부 연동 흐름을 시뮬레이션하여 구현했습니다.
-- **취소/환불 전략**: 전체 취소 및 부분 취소를 지원하며, 외부 PG사 처리 결과와 내부 DB 상태를 일치시킵니다.
-- **Transactional Outbox**: 모든 결제 승인 및 취소 결과는 `payment_events` 테이블에 저장되어 후속 비즈니스 로직(재고 복구, 포인트 회수 등)의 원자성을 보장합니다.
-
----
-
-## 📂 주요 소스 코드 구조
-
-| 패키지 / 파일 | 설명 |
-|---|---|
-| `api.PaymentController` | 결제 생성, 승인, 취소 API (멱등성 적용) |
-| `domain.payment.Payment` | 결제 도메인 모델 (금액 검증 및 상태 전이 로직 포함) |
-| `domain.payment.PaymentService` | 결제 라이프사이클 관리 (승인 시뮬레이션, 취소 처리 등) |
-| `domain.payment.PaymentEventEntity` | 결제용 Transactional Outbox 엔티티 (승인/취소 이벤트) |
-| `domain.transfer.TransferService` | Saga 각 단계(출금, 입금, 환불)의 로컬 트랜잭션 처리 |
+### 5. 관측 가능성 (Observability) - 분산 추적
+분산된 인스턴스와 비동기 메시징(Kafka) 환경에서 요청의 전체 경로를 추적합니다.
+- **Micrometer Tracing**: Spring Boot 3의 표준 추적 라이브러리를 사용하여 모든 API 요청과 Kafka 메시지에 `traceId`를 부여합니다.
+- **Zipkin 통합**: 수집된 추적 데이터를 Zipkin 서버로 전송하여 가각의 Span(작업 단위)을 시각화합니다.
+- **로그 통합**: 로그 패턴에 `traceId`와 `spanId`를 포함하여, 로그 시스템만으로도 특정 요청의 흐름을 추적할 수 있습니다.
 
 ---
 
 ## ✅ 현재 상태 및 검증 내역
-- **이체 시스템**: Saga 패턴 및 Outbox 패턴 통합 테스트 완료.
-- **결제 시스템**: **[완료]** 결제 승인, 위변조 검증, 전체/부분 취소 기능 구현 완료. (Phase 3)
-- **인프라**: NGINX 로드 밸런싱 및 멀티 인스턴스 구성 완료.
+- **이체 및 결제 시스템**: Saga 패턴, Outbox 패턴, 위변조 검증 기능 통합 완료.
+- **멀티 인스턴스**: NGINX 로드 밸런싱 및 HA 구성 완료.
+- **관측 가능성**: **[완료]** Micrometer Tracing 및 Zipkin 리포터 설정 완료. (Phase 1)
 
-**최종 업데이트 일자**: 2026-03-27 (결제 및 환불 시스템 완성)
+**최종 업데이트 일자**: 2026-03-27 (분산 추적 시스템 추가)

@@ -1,7 +1,7 @@
 version: '3.8'
 
 services:
-  # MySQL: 계좌 및 이벤트 데이터 저장
+  # MySQL: 데이터 저장
   mysql:
     image: mysql:8.0
     container_name: transfer-mysql
@@ -18,7 +18,7 @@ services:
       timeout: 5s
       retries: 10
 
-  # Redis: 멱등성 키 및 분산 락 저장소
+  # Redis: 멱등성 및 분산 락
   redis:
     image: redis:latest
     container_name: transfer-redis
@@ -53,6 +53,13 @@ services:
       - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
       - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
 
+  # Zipkin: Distributed Tracing Dashboard
+  zipkin:
+    image: openzipkin/zipkin:latest
+    container_name: transfer-zipkin
+    ports:
+      - "9411:9411"
+
   # NGINX Load Balancer
   nginx:
     image: nginx:latest
@@ -76,11 +83,14 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/transfer_db?allowPublicKeyRetrieval=true&useSSL=false
       - SPRING_DATA_REDIS_HOST=redis
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - MANAGEMENT_ZIPKIN_TRACING_ENDPOINT=http://zipkin:9411/api/v2/spans
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      zipkin:
+        condition: service_started
 
   transfer-app-2:
     build: .
@@ -91,11 +101,14 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/transfer_db?allowPublicKeyRetrieval=true&useSSL=false
       - SPRING_DATA_REDIS_HOST=redis
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - MANAGEMENT_ZIPKIN_TRACING_ENDPOINT=http://zipkin:9411/api/v2/spans
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      zipkin:
+        condition: service_started
 
   transfer-app-3:
     build: .
@@ -106,8 +119,11 @@ services:
       - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/transfer_db?allowPublicKeyRetrieval=true&useSSL=false
       - SPRING_DATA_REDIS_HOST=redis
       - SPRING_KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - MANAGEMENT_ZIPKIN_TRACING_ENDPOINT=http://zipkin:9411/api/v2/spans
     depends_on:
       mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      zipkin:
+        condition: service_started
