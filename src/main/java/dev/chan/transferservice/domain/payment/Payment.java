@@ -23,10 +23,13 @@ public class Payment {
     private String orderId;
 
     @Column(unique = true)
-    private String paymentKey; // PG사 발행 키
+    private String paymentKey;
 
     @Column(nullable = false, precision = 19, scale = 4)
     private BigDecimal amount;
+
+    @Column(nullable = false, precision = 19, scale = 4)
+    private BigDecimal canceledAmount = BigDecimal.ZERO; // 누적 취소 금액
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -45,38 +48,49 @@ public class Payment {
         this.updatedAt = LocalDateTime.now();
     }
 
-    // 결제 승인 프로세스 시작 (금액 검증 단계)
     public void startApproval(String paymentKey) {
         if (this.status != PaymentStatus.READY) {
-            throw new IllegalStateException("결제 준비 상태에서만 승인을 시작할 수 있습니다. 현재 상태: " + this.status);
+            throw new IllegalStateException("결제 준비 상태에서만 승인을 시작할 수 있습니다.");
         }
         this.paymentKey = paymentKey;
         this.status = PaymentStatus.IN_PROGRESS;
         this.updatedAt = LocalDateTime.now();
     }
 
-    // 결제 완료 처리
     public void complete() {
         if (this.status != PaymentStatus.IN_PROGRESS) {
-            throw new IllegalStateException("진행 중인 결제만 완료할 수 있습니다. 현재 상태: " + this.status);
+            throw new IllegalStateException("진행 중인 결제만 완료할 수 있습니다.");
         }
         this.status = PaymentStatus.DONE;
         this.approvedAt = LocalDateTime.now();
         this.updatedAt = LocalDateTime.now();
     }
 
-    // 결제 실패/중단 처리
     public void abort() {
         this.status = PaymentStatus.ABORTED;
         this.updatedAt = LocalDateTime.now();
     }
 
-    // 결제 취소 처리
-    public void cancel() {
-        if (this.status != PaymentStatus.DONE) {
-            throw new IllegalStateException("완료된 결제만 취소할 수 있습니다.");
+    // 취소 로직 (전체 및 부분 취소 대응)
+    public void cancel(BigDecimal cancelAmount) {
+        if (this.status != PaymentStatus.DONE && this.status != PaymentStatus.PARTIAL_CANCELED) {
+            throw new IllegalStateException("결제 완료 상태에서만 취소가 가능합니다.");
         }
-        this.status = PaymentStatus.CANCELED;
+
+        BigDecimal totalCancelTarget = this.canceledAmount.add(cancelAmount);
+        
+        if (totalCancelTarget.compareTo(this.amount) > 0) {
+            throw new IllegalArgumentException("취소 요청 금액이 결제 잔액을 초과합니다.");
+        }
+
+        this.canceledAmount = totalCancelTarget;
+        
+        if (this.canceledAmount.compareTo(this.amount) == 0) {
+            this.status = PaymentStatus.CANCELED;
+        } else {
+            this.status = PaymentStatus.PARTIAL_CANCELED;
+        }
+        
         this.updatedAt = LocalDateTime.now();
     }
 }
