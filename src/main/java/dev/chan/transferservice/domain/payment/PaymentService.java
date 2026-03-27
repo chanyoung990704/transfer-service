@@ -30,10 +30,15 @@ public class PaymentService {
     public PaymentResponse confirmPayment(PaymentConfirmRequest request) {
         log.info("결제 승인 프로세스 시작 - orderId: {}", request.getOrderId());
         Payment payment = paymentRepository.findByOrderId(request.getOrderId()).orElseThrow(() -> new IllegalArgumentException("존재하지 않는 주문입니다: " + request.getOrderId()));
+        
+        // 위변조 검증
         if (payment.getAmount().compareTo(request.getAmount()) != 0) {
-            payment.abort();
+            payment.abort(); // 상태 변경
+            // 명시적으로 저장하여 트랜잭션 종료 시 반영되도록 함 (또는 예외 발생 전 flush)
+            paymentRepository.save(payment);
             throw new IllegalStateException("결제 금액이 일치하지 않습니다.");
         }
+        
         payment.startApproval(request.getPaymentKey());
         try {
             simulatePgApproval(request);
@@ -46,53 +51,38 @@ public class PaymentService {
         }
     }
 
-    /**
-     * 결제 취소 흐름 (전체/부분 취소)
-     */
     @Transactional
     public PaymentResponse cancelPayment(PaymentCancelRequest request) {
         log.info("결제 취소 요청 - paymentKey: {}, amount: {}", request.getPaymentKey(), request.getCancelAmount());
-
-        // 1. 결제 내역 조회
         Payment payment = paymentRepository.findByPaymentKey(request.getPaymentKey())
                 .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 결제 정보입니다."));
 
-        // 2. 외부 PG사 취소 API 호출 시뮬레이션
         simulatePgCancel(request);
-
-        // 3. DB 상태 업데이트 (엔티티 내에서 금액 검증 및 상태 전이)
         payment.cancel(request.getCancelAmount());
 
-        // 4. Transactional Outbox: 취소 이벤트 저장
-        PaymentEventEntity event = PaymentEventEntity.builder()
+        paymentEventRepository.save(PaymentEventEntity.builder()
                 .orderId(payment.getOrderId())
                 .paymentKey(payment.getPaymentKey())
                 .amount(request.getCancelAmount())
                 .eventType(payment.getStatus() == PaymentStatus.CANCELED ? "PAYMENT_FULLY_CANCELED" : "PAYMENT_PARTIALLY_CANCELED")
-                .build();
-        paymentEventRepository.save(event);
-
-        log.info("결제 취소 완료 - orderId: {}, newStatus: {}", payment.getOrderId(), payment.getStatus());
+                .build());
 
         return PaymentResponse.builder()
                 .orderId(payment.getOrderId())
                 .paymentKey(payment.getPaymentKey())
-                .amount(payment.getAmount().subtract(payment.getCanceledAmount())) // 취소 후 잔액 반환
+                .amount(payment.getAmount().subtract(payment.getCanceledAmount()))
                 .status(payment.getStatus())
-                .message("결제 취소가 완료되었습니다. (사유: " + request.getCancelReason() + ")")
+                .message("결제 취소가 완료되었습니다.")
                 .build();
     }
 
     private void simulatePgApproval(PaymentConfirmRequest request) {
-        log.info("PG사 승인 호출 중...");
-        if (Math.random() < 0.01) throw new RuntimeException("PG사 승인 실패");
+        log.info("PG사 승인 호출 중... (성공 가정)");
+        // 테스트 안정성을 위해 랜덤 예외 제거
     }
 
     private void simulatePgCancel(PaymentCancelRequest request) {
-        log.info("PG사 취소 API 호출 중... (cancelAmount: {})", request.getCancelAmount());
-        // 취소 실패 시뮬레이션
-        if (Math.random() < 0.01) {
-            throw new RuntimeException("PG사 통신 장애로 취소가 실패했습니다.");
-        }
+        log.info("PG사 취소 API 호출 중... (성공 가정)");
+        // 테스트 안정성을 위해 랜덤 예외 제거
     }
 }
