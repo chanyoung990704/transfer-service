@@ -2,7 +2,6 @@ package dev.chan.transferservice.domain.event;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -23,7 +22,6 @@ public class TransferEventRelay {
      * - 멀티 인스턴스 중복 실행 방지를 위해 ShedLock 적용
      */
     @Scheduled(fixedDelay = 1000)
-    @SchedulerLock(name = "transferEventRelayLock", lockAtLeastFor = "500ms", lockAtMostFor = "10s")
     @Transactional
     public void relay() {
         List<TransferEventEntity> unpublishedEvents = transferEventRepository.findByPublishedFalse();

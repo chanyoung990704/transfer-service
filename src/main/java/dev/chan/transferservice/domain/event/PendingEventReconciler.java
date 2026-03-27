@@ -2,7 +2,6 @@ package dev.chan.transferservice.domain.event;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -22,7 +21,6 @@ public class PendingEventReconciler {
      * - 멀티 인스턴스 중복 실행 방지를 위해 ShedLock 적용
      */
     @Scheduled(fixedDelay = 10000)
-    @SchedulerLock(name = "pendingEventReconcileLock", lockAtLeastFor = "5s", lockAtMostFor = "30s")
     public void reconcile() {
         if (!pendingEventRedisService.isHealthy()) {
             return;
