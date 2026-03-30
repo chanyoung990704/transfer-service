@@ -3,12 +3,16 @@ package dev.chan.transferservice.domain.payment;
 import dev.chan.transferservice.api.dto.PaymentConfirmRequest;
 import dev.chan.transferservice.api.dto.PaymentCancelRequest;
 import dev.chan.transferservice.api.dto.PaymentResponse;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
+import io.github.resilience4j.timelimiter.annotation.TimeLimiter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.util.concurrent.CompletableFuture;
 
 @Service
 @RequiredArgsConstructor
@@ -27,6 +31,8 @@ public class PaymentService {
     }
 
     @Transactional
+    @CircuitBreaker(name = "paymentConfirm", fallbackMethod = "confirmPaymentFallback")
+    @Retry(name = "paymentConfirm")
     public PaymentResponse confirmPayment(PaymentConfirmRequest request) {
         log.info("결제 승인 프로세스 시작 - orderId: {}", request.getOrderId());
         Payment payment = paymentRepository.findByOrderId(request.getOrderId()).orElseThrow(() -> new IllegalArgumentException("존재하지 않는 주문입니다: " + request.getOrderId()));
@@ -49,6 +55,15 @@ public class PaymentService {
             payment.abort();
             throw e;
         }
+    }
+
+    public PaymentResponse confirmPaymentFallback(PaymentConfirmRequest request, Throwable t) {
+        log.error("결제 승인 중 장애 발생 (Fallback 실행) - orderId: {}, 사유: {}", request.getOrderId(), t.getMessage());
+        return PaymentResponse.builder()
+                .orderId(request.getOrderId())
+                .status(PaymentStatus.FAILED)
+                .message("현재 결제 서비스가 원활하지 않습니다. 나중에 다시 시도해 주세요. (장애 전파 차단)")
+                .build();
     }
 
     @Transactional
