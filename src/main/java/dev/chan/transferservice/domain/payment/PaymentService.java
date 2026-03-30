@@ -61,7 +61,7 @@ public class PaymentService {
         log.error("결제 승인 중 장애 발생 (Fallback 실행) - orderId: {}, 사유: {}", request.getOrderId(), t.getMessage());
         return PaymentResponse.builder()
                 .orderId(request.getOrderId())
-                .status(PaymentStatus.FAILED)
+                .status(PaymentStatus.ABORTED)
                 .message("현재 결제 서비스가 원활하지 않습니다. 나중에 다시 시도해 주세요. (장애 전파 차단)")
                 .build();
     }
