@@ -60,6 +60,27 @@ services:
     ports:
       - "9411:9411"
 
+  # Prometheus: Metrics Collector
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: transfer-prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+
+  # Grafana: Visualization Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: transfer-grafana
+    ports:
+      - "3000:3000"
+    depends_on:
+      - prometheus
+
   # NGINX Load Balancer
   nginx:
     image: nginx:latest
