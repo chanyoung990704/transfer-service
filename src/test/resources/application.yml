@@ -30,6 +30,10 @@ spring:
       properties:
         spring.json.trusted.packages: "dev.chan.transferservice.domain.event"
 
+  batch:
+    job:
+      enabled: false
+
 transfer:
   idempotency:
     ttl-seconds: 86400

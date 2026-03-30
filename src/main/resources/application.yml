@@ -38,6 +38,12 @@ spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
 
+  batch:
+    job:
+      enabled: false
+    jdbc:
+      initialize-schema: always
+
 management:
   endpoints:
     web:
